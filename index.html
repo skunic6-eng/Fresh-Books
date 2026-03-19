@@ -318,7 +318,30 @@ body::before {
 .entry-amount { font-family: 'Caveat', cursive; font-weight: 700; font-size: 18px; }
 .entry-amount.inc { color: var(--peacock); }
 .entry-amount.exp { color: var(--pink); }
-.entry-date { font-size: 10px; color: var(--text-muted); text-align: right; }
+.entry-date { font-size: 10px; color: var(--text-muted); text-align: right; margin-bottom: 4px; }
+
+.entry-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.btn-edit, .btn-delete {
+  background: none; border: none; font-size: 14px; cursor: pointer;
+  padding: 4px; border-radius: 4px; transition: background 0.2s;
+}
+.btn-edit:hover { background: var(--peacock-light); }
+.btn-delete:hover { background: var(--pink-light); }
+
+/* ===== MODAL ===== */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(26, 26, 46, 0.4); backdrop-filter: blur(4px);
+  display: none; align-items: center; justify-content: center; z-index: 2000;
+  padding: 20px;
+}
+.modal-overlay.active { display: flex; }
+.modal-card {
+  background: var(--card); border-radius: var(--radius); width: 100%; max-width: 400px;
+  padding: 24px; box-shadow: var(--shadow-hover); position: relative;
+  border: 1.5px solid var(--border-gold);
+}
+.modal-close { position: absolute; top: 16px; right: 16px; font-size: 20px; cursor: pointer; color: var(--text-muted); }
 
 .empty-state { text-align: center; padding: 24px; color: var(--text-muted); }
 .empty-state .empty-icon { font-size: 36px; margin-bottom: 8px; }
@@ -487,6 +510,36 @@ body::before {
 <div class="bg-decor"></div>
 
 <div class="toast" id="toast">✨ Logged!</div>
+
+<!-- EDIT MODAL -->
+<div class="modal-overlay" id="editModal">
+  <div class="modal-card">
+    <div class="modal-close" onclick="closeEditModal()">✕</div>
+    <h2>✏️ Edit Entry</h2>
+    <div class="subtitle">Modify the details of your entry ✦</div>
+    <input type="hidden" id="editEntryId">
+    <div class="capture-form" style="margin-top: 16px;">
+      <div class="input-group">
+        <label>Date</label>
+        <input type="date" id="editDate">
+      </div>
+      <div class="input-group">
+        <label>Amount</label>
+        <span class="dollar-prefix">$</span>
+        <input type="number" id="editAmount" class="with-prefix" placeholder="0.00" step="0.01" inputmode="decimal">
+      </div>
+      <div class="input-group">
+        <label>Description</label>
+        <input type="text" id="editDesc" placeholder="e.g., Fabuloso cleaner...">
+      </div>
+      <div class="input-group">
+        <label>Category</label>
+        <div class="category-grid" id="editCategoryGrid"></div>
+      </div>
+      <button class="submit-btn" id="saveEditBtn" onclick="saveEdit()">Save Changes ✦</button>
+    </div>
+  </div>
+</div>
 
 <div class="app">
 
@@ -819,6 +872,70 @@ function selectCat(id) {
   renderCategories();
 }
 
+function selectEditCat(id) {
+  const entryId = document.getElementById('editEntryId').value;
+  const entry = entries.find(e => e.id == entryId);
+  entry.tempCategory = id;
+  renderEditCategories(entry.type, id);
+}
+
+function renderEditCategories(type, selected) {
+  const grid = document.getElementById('editCategoryGrid');
+  const cats = type === 'expense' ? expenseCategories : incomeCategories;
+  grid.innerHTML = cats.map(c => `
+    <button class="cat-btn ${selected === c.id ? 'selected' : ''}" onclick="selectEditCat('${c.id}')">
+      <span class="cat-icon">${c.icon}</span>
+      ${c.label}
+    </button>
+  `).join('');
+}
+
+function editEntry(id) {
+  const entry = entries.find(e => e.id == id);
+  if (!entry) return;
+
+  document.getElementById('editEntryId').value = id;
+  document.getElementById('editDate').value = new Date(entry.date).toISOString().slice(0, 10);
+  document.getElementById('editAmount').value = entry.amount;
+  document.getElementById('editDesc').value = entry.description;
+  entry.tempCategory = entry.category;
+  renderEditCategories(entry.type, entry.category);
+
+  document.getElementById('editModal').classList.add('active');
+}
+
+function closeEditModal() {
+  document.getElementById('editModal').classList.remove('active');
+}
+
+function saveEdit() {
+  const id = document.getElementById('editEntryId').value;
+  const entry = entries.find(e => e.id == id);
+  if (!entry) return;
+
+  const amount = parseFloat(document.getElementById('editAmount').value);
+  const desc = document.getElementById('editDesc').value.trim();
+  const date = document.getElementById('editDate').value;
+  const cat = entry.tempCategory;
+
+  if (!amount || amount <= 0) { shakeElement(document.getElementById('editAmount')); return; }
+  if (!cat) { shakeElement(document.getElementById('editCategoryGrid')); return; }
+  if (!date) { shakeElement(document.getElementById('editDate')); return; }
+
+  entry.amount = amount;
+  entry.description = desc || (entry.type === 'expense' ? 'Expense' : 'Income');
+  entry.date = new Date(date + 'T12:00:00').toISOString();
+  entry.category = cat;
+  entry.lastEdited = new Date().toISOString();
+  delete entry.tempCategory;
+
+  localStorage.setItem('cleanbooks_entries', JSON.stringify(entries));
+  closeEditModal();
+  updateDashboard();
+  renderEntries();
+  showToast('✦ Entry updated!');
+}
+
 function submitEntry() {
   const amount = parseFloat(document.getElementById('inputAmount').value);
   const desc = document.getElementById('inputDesc').value.trim();
@@ -849,11 +966,58 @@ function shakeElement(el) {
   setTimeout(() => el.style.animation = '', 400);
 }
 
-function showToast(msg) {
+function showToast(msg, onUndo = null) {
   const toast = document.getElementById('toast');
-  toast.textContent = msg;
+  toast.innerHTML = msg;
+  if (onUndo) {
+    const btn = document.createElement('button');
+    btn.textContent = 'Undo';
+    btn.style.marginLeft = '12px';
+    btn.style.background = 'white';
+    btn.style.color = 'var(--pink)';
+    btn.style.border = 'none';
+    btn.style.borderRadius = '4px';
+    btn.style.padding = '2px 8px';
+    btn.style.fontSize = '12px';
+    btn.style.fontWeight = '700';
+    btn.style.cursor = 'pointer';
+    btn.onclick = () => { onUndo(); toast.classList.remove('show'); };
+    toast.appendChild(btn);
+  }
   toast.classList.add('show');
-  setTimeout(() => toast.classList.remove('show'), 2000);
+  setTimeout(() => toast.classList.remove('show'), onUndo ? 3000 : 2000);
+}
+
+let deleteTimeout = null;
+let pendingDeleteId = null;
+
+function deleteEntry(id) {
+  if (deleteTimeout) {
+    clearTimeout(deleteTimeout);
+    finalizeDelete();
+  }
+  pendingDeleteId = id;
+  const entry = entries.find(e => e.id === id);
+  showToast('Entry deleted...', () => {
+    clearTimeout(deleteTimeout);
+    deleteTimeout = null;
+    pendingDeleteId = null;
+    showToast('Restored!');
+  });
+
+  deleteTimeout = setTimeout(() => {
+    finalizeDelete();
+  }, 3000);
+}
+
+function finalizeDelete() {
+  if (!pendingDeleteId) return;
+  entries = entries.filter(e => e.id !== pendingDeleteId);
+  localStorage.setItem('cleanbooks_entries', JSON.stringify(entries));
+  pendingDeleteId = null;
+  deleteTimeout = null;
+  updateDashboard();
+  renderEntries();
 }
 
 function spawnConfetti() {
@@ -954,6 +1118,10 @@ function renderEntries() {
         <div>
           <div class="entry-amount ${isIncome ? 'inc' : 'exp'}">${isIncome ? '+' : '-'}$${e.amount.toFixed(2)}</div>
           <div class="entry-date">${dateStr}</div>
+          <div class="entry-actions">
+            <button class="btn-edit" onclick="editEntry(${e.id})" title="Edit">✏️</button>
+            <button class="btn-delete" onclick="deleteEntry(${e.id})" title="Delete">🗑️</button>
+          </div>
         </div>
       </div>`;
   }).join('');
